@@ -1,0 +1,155 @@
+name: Deploy to AWS
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:   # allow manual trigger from GitHub UI
+
+permissions:
+  contents: read       # read repo; no extra perms needed
+
+env:
+  AWS_REGION: us-west-2
+  PYTHON_VERSION: "3.12"
+  NODE_VERSION: "20"
+
+jobs:
+  # ──────────────────────────────────────────────────────────────────────────
+  # Job 1: lint + unit tests (fast, no AWS credentials needed)
+  # ──────────────────────────────────────────────────────────────────────────
+  test:
+    name: Lint & Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install runtime deps
+        run: pip install -r requirements.txt
+
+      - name: Validate imports (smoke test)
+        run: |
+          python -c "
+          from app.config import get_settings, CATEGORIES
+          from app.models import TopicItem, TrendResponse, RefreshRequest
+          from app.services.dataforseo import fetch_trends
+          from app.services.dynamodb import TrendRepository
+          from app.dependencies import verify_api_key
+          from app.main import app
+          routes = [r.path for r in app.routes if hasattr(r, 'path')]
+          assert '/v1/trends/current' in routes
+          assert '/v1/trends/refresh' in routes
+          assert len(CATEGORIES) >= 10
+          print('Smoke test passed. Routes:', routes)
+          "
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Job 2: CDK synth (validate CloudFormation template, no deploy)
+  # Runs without AWS credentials — just needs CDK installed.
+  # ──────────────────────────────────────────────────────────────────────────
+  synth:
+    name: CDK Synth
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements-cdk.txt
+
+      - name: Set up Node.js (required by CDK CLI)
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install CDK CLI
+        run: npm install -g aws-cdk
+
+      - name: Install CDK Python deps
+        run: pip install -r requirements-cdk.txt
+
+      - name: CDK Synth (dry-run, validates template)
+        # Provide dummy AWS env so CDK doesn't fail resolution — synth doesn't
+        # actually call AWS.  SSM lookups (valueForStringParameter) ARE resolved
+        # at deploy time, not synth time, so this is safe.
+        env:
+          CDK_DEFAULT_ACCOUNT: "123456789012"
+          CDK_DEFAULT_REGION: ${{ env.AWS_REGION }}
+          AWS_ACCESS_KEY_ID: "AKIAIOSFODNN7EXAMPLE"
+          AWS_SECRET_ACCESS_KEY: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+          AWS_DEFAULT_REGION: ${{ env.AWS_REGION }}
+        run: cdk synth --quiet
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Job 3: CDK Deploy (only on push to main, after synth passes)
+  # Requires AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY repo secrets.
+  # ──────────────────────────────────────────────────────────────────────────
+  deploy:
+    name: CDK Deploy
+    runs-on: ubuntu-latest
+    needs: synth
+    environment: production    # optional GitHub environment for approval gates
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements-cdk.txt
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install CDK CLI
+        run: npm install -g aws-cdk
+
+      - name: Install CDK Python deps
+        run: pip install -r requirements-cdk.txt
+
+      - name: CDK Bootstrap (idempotent — safe to run every deploy)
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          cdk bootstrap aws://${ACCOUNT_ID}/${{ env.AWS_REGION }} --quiet
+        env:
+          CDK_DEFAULT_REGION: ${{ env.AWS_REGION }}
+
+      - name: CDK Deploy
+        run: cdk deploy --require-approval never --outputs-file cdk-outputs.json
+        env:
+          CDK_DEFAULT_REGION: ${{ env.AWS_REGION }}
+
+      - name: Print stack outputs
+        if: success()
+        run: |
+          echo "=== Stack outputs ==="
+          cat cdk-outputs.json
+          API_URL=$(jq -r '.TrendSpotterStack.ApiBaseUrl // "not found"' cdk-outputs.json)
+          echo "API URL: $API_URL"

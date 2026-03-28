@@ -1,0 +1,14 @@
+# Runtime dependencies (Lambda layer)
+# Note: boto3 version is pinned to match aioboto3's aiobotocore requirement.
+# Run `pip install aioboto3==13.2.0` first, then `pip show boto3` to confirm the
+# exact compatible version — it is pinned tightly by aiobotocore.
+fastapi==0.115.5
+mangum==0.19.0
+pydantic==2.10.3
+pydantic-settings==2.6.1
+aioboto3==13.2.0                   # pulls in compatible boto3 + aiobotocore automatically
+httpx==0.28.1
+python-dotenv==1.0.1
+
+# Local development only (not needed on Lambda)
+uvicorn[standard]==0.32.1
