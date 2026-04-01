@@ -151,11 +151,6 @@ jobs:
             --name /trend-spotter/dataforseo-password \
             --value "${{ secrets.DATAFORSEO_PASSWORD }}" \
             --type String --overwrite
-          aws ssm put-parameter \
-            --name /trend-spotter/api-key \
-            --value "${{ secrets.TREND_SPOTTER_API_KEY }}" \
-            --type String --overwrite
-
       - name: CDK Deploy
         run: cdk deploy --require-approval never --outputs-file cdk-outputs.json
         env:

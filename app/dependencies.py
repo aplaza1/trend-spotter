@@ -14,29 +14,13 @@ from __future__ import annotations
 import logging
 import time
 from collections import deque
-from typing import Annotated, Optional
+from typing import Annotated
 
-from fastapi import Depends, Header, HTTPException, Request, status
+from fastapi import Depends, HTTPException, Request, status
 
 from app.config import Settings, get_settings
 
 logger = logging.getLogger(__name__)
-
-# ──────────────────────────────────────────────────────────────────────────────
-# API Key authentication
-# ──────────────────────────────────────────────────────────────────────────────
-
-async def verify_api_key(
-    x_api_key: Annotated[Optional[str], Header()] = None,
-    settings: Settings = Depends(get_settings),
-) -> None:
-    """Raise 401 if X-API-Key header is missing or does not match configured key."""
-    if not x_api_key or x_api_key != settings.api_key:
-        logger.warning("Rejected request with invalid or missing API key")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or missing X-API-Key header",
-        )
 
 
 # ──────────────────────────────────────────────────────────────────────────────

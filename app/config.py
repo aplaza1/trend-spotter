@@ -167,9 +167,6 @@ class Settings(BaseSettings):
     dataforseo_login: str = ""
     dataforseo_password: str = ""
 
-    # Auth
-    api_key: str = ""
-
     # AWS
     dynamodb_table_name: str = "trend-spotter"
     aws_region: str = "us-east-1"

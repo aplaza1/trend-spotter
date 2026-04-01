@@ -82,20 +82,15 @@ class TrendSpotterStack(Stack):
         # Locally, create them once with:
         #
         #   aws ssm put-parameter --name /trend-spotter/dataforseo-login \
-        #     --value "YOUR_LOGIN" --type SecureString --overwrite
+        #     --value "YOUR_LOGIN" --type String --overwrite
         #   aws ssm put-parameter --name /trend-spotter/dataforseo-password \
-        #     --value "YOUR_PASS" --type SecureString --overwrite
-        #   aws ssm put-parameter --name /trend-spotter/api-key \
-        #     --value "YOUR_KEY" --type SecureString --overwrite
+        #     --value "YOUR_PASS" --type String --overwrite
 
         dataforseo_login_param = ssm.StringParameter.from_string_parameter_name(
             self, "DataForSEOLogin", "/trend-spotter/dataforseo-login"
         )
         dataforseo_password_param = ssm.StringParameter.from_string_parameter_name(
             self, "DataForSEOPassword", "/trend-spotter/dataforseo-password"
-        )
-        api_key_param = ssm.StringParameter.from_string_parameter_name(
-            self, "TrendSpotterAPIKey", "/trend-spotter/api-key"
         )
 
         # ── Lambda IAM role ───────────────────────────────────────────────────
@@ -114,7 +109,7 @@ class TrendSpotterStack(Stack):
         # DynamoDB access
         table.grant_read_write_data(lambda_role)
 
-        # SSM read access for the three parameters
+        # SSM read access for DataForSEO credentials
         lambda_role.add_to_policy(
             iam.PolicyStatement(
                 effect=iam.Effect.ALLOW,
@@ -122,7 +117,6 @@ class TrendSpotterStack(Stack):
                 resources=[
                     dataforseo_login_param.parameter_arn,
                     dataforseo_password_param.parameter_arn,
-                    api_key_param.parameter_arn,
                 ],
             )
         )
@@ -174,9 +168,6 @@ class TrendSpotterStack(Stack):
                 ),
                 "DATAFORSEO_PASSWORD": ssm.StringParameter.value_for_string_parameter(
                     self, "/trend-spotter/dataforseo-password"
-                ),
-                "API_KEY": ssm.StringParameter.value_for_string_parameter(
-                    self, "/trend-spotter/api-key"
                 ),
                 "AWS_REGION_NAME": self.region,
             },

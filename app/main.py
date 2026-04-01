@@ -31,7 +31,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from mangum import Mangum
 
 from app.config import CATEGORIES, Settings, get_settings
-from app.dependencies import check_refresh_rate_limit, verify_api_key
+from app.dependencies import check_refresh_rate_limit
 from app.models import RefreshRequest, TrendResponse
 from app.services.dataforseo import fetch_trends
 from app.services.dynamodb import TrendRepository
@@ -85,7 +85,6 @@ def get_repo(settings: Settings = Depends(get_settings)) -> TrendRepository:
     "/v1/trends/current",
     response_model=TrendResponse,
     summary="Get latest cached trends",
-    dependencies=[Depends(verify_api_key)],
     tags=["trends"],
 )
 async def get_current_trends(
@@ -134,7 +133,7 @@ async def get_current_trends(
     response_model=TrendResponse,
     summary="Refresh trends from DataForSEO (costs API credits)",
     status_code=status.HTTP_200_OK,
-    dependencies=[Depends(verify_api_key), Depends(check_refresh_rate_limit)],
+    dependencies=[Depends(check_refresh_rate_limit)],
     tags=["trends"],
 )
 async def refresh_trends(
@@ -192,7 +191,7 @@ async def health() -> dict:
     return {"status": "ok"}
 
 
-@app.get("/v1/categories", tags=["meta"], dependencies=[Depends(verify_api_key)])
+@app.get("/v1/categories", tags=["meta"])
 async def list_categories() -> dict:
     """List all supported category keys and their seed keywords."""
     return {
