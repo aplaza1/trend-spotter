@@ -25,6 +25,8 @@ from __future__ import annotations
 import logging
 from typing import Annotated
 
+import os
+
 import boto3
 from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -55,6 +57,7 @@ app = FastAPI(
     title="Trend Spotter API",
     description="Returns current trending topics per category using DataForSEO Google Trends data.",
     version="1.0.0",
+    root_path=os.environ.get("ROOT_PATH", ""),
     docs_url="/docs",
     redoc_url="/redoc",
 )

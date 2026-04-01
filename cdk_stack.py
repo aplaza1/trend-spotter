@@ -170,6 +170,7 @@ class TrendSpotterStack(Stack):
                     self, "/trend-spotter/dataforseo-password"
                 ),
                 "AWS_REGION_NAME": self.region,
+                "ROOT_PATH": "/prod",
             },
             log_group=log_group,
         )
