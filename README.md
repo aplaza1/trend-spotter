@@ -7,15 +7,16 @@ Single-user serverless API that returns **current trending topics** for a given 
 ## Architecture
 
 ```
-Client → API Gateway (API Key) → Lambda (FastAPI + Mangum)
-                                      ├── GET /v1/trends/current → DynamoDB read
-                                      └── POST /v1/trends/refresh → DataForSEO → DynamoDB write
+Client → API Gateway (x-api-key) → Lambda (FastAPI + Mangum)
+                                        ├── GET /v1/trends/current → DynamoDB read
+                                        └── POST /v1/trends/refresh → DataForSEO → DynamoDB write
 ```
 
 - **No cron jobs.** Data is only fetched from DataForSEO when you explicitly call `POST /refresh`.
 - **GET /current** is a pure DynamoDB read — fast and free.
 - **Single-table DynamoDB** design: `pk = category#<name>`, `sk = snapshot#latest`.
 - **TTL:** Items expire after 90 days automatically.
+- **Auth:** A single API Gateway key (`x-api-key` header) is enforced at the gateway level. No app-level key duplication.
 
 ---
 
@@ -28,7 +29,7 @@ trend-spotter/
 │   ├── main.py              # FastAPI app + Mangum Lambda handler
 │   ├── models.py            # Pydantic v2 request/response models
 │   ├── config.py            # Category seeds + Settings
-│   ├── dependencies.py      # API key auth + rate limiter
+│   ├── dependencies.py      # Rate limiter
 │   └── services/
 │       ├── __init__.py
 │       ├── dataforseo.py    # Async DataForSEO client
@@ -73,19 +74,15 @@ trend-spotter/
 ### 2. Setup
 
 ```bash
-# Clone and enter the directory
 cd trend-spotter
 
-# Create a virtual environment
 python -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
 
-# Install runtime + dev deps
 pip install -r requirements.txt
 
-# Configure environment variables
 cp .env.example .env
-# Edit .env — fill in DATAFORSEO_LOGIN, DATAFORSEO_PASSWORD, API_KEY
+# Edit .env — fill in DATAFORSEO_LOGIN, DATAFORSEO_PASSWORD
 ```
 
 ### 3. Run locally
@@ -94,26 +91,25 @@ cp .env.example .env
 uvicorn app.main:app --reload --port 8000
 ```
 
-Interactive docs: http://localhost:8000/docs
+Interactive docs: http://localhost:8000/docs  
+*(No API key required locally — auth is enforced at the API Gateway level, not in the app.)*
 
 ### 4. Test locally
 
 ```bash
-# Health check (no auth)
+# Health check
 curl http://localhost:8000/health
 
 # List categories
-curl -H "X-API-Key: your_secret_key" http://localhost:8000/v1/categories
+curl http://localhost:8000/v1/categories
 
 # Refresh trends for travel (calls DataForSEO — costs credits)
 curl -X POST http://localhost:8000/v1/trends/refresh \
   -H "Content-Type: application/json" \
-  -H "X-API-Key: your_secret_key" \
   -d '{"category": "travel", "region": "global"}'
 
 # Get cached trends (fast DynamoDB read)
-curl "http://localhost:8000/v1/trends/current?category=travel&limit=10" \
-  -H "X-API-Key: your_secret_key"
+curl "http://localhost:8000/v1/trends/current?category=travel&limit=10"
 ```
 
 ---
@@ -131,45 +127,29 @@ npm install -g aws-cdk          # CDK CLI (requires Node.js)
 
 ```bash
 export CDK_DEFAULT_ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
-export CDK_DEFAULT_REGION=us-east-1
+export CDK_DEFAULT_REGION=us-west-2
 cdk bootstrap aws://$CDK_DEFAULT_ACCOUNT/$CDK_DEFAULT_REGION
 ```
 
-### 3. Set SSM credentials BEFORE deploying
-
-The CDK stack creates placeholder SSM parameters. Update them with real values:
+### 3. Create SSM parameters BEFORE deploying
 
 ```bash
-# DataForSEO login
 aws ssm put-parameter \
   --name /trend-spotter/dataforseo-login \
   --value "your_dataforseo_email" \
-  --type SecureString --overwrite
+  --type String --overwrite
 
-# DataForSEO password
 aws ssm put-parameter \
   --name /trend-spotter/dataforseo-password \
   --value "your_dataforseo_password" \
-  --type SecureString --overwrite
-
-# Your API key (any strong random string)
-aws ssm put-parameter \
-  --name /trend-spotter/api-key \
-  --value "$(openssl rand -hex 32)" \
-  --type SecureString --overwrite
-
-# Print the generated key so you can save it
-aws ssm get-parameter --name /trend-spotter/api-key --with-decryption --query Parameter.Value --output text
+  --type String --overwrite
 ```
 
 ### 4. Deploy
 
 ```bash
-# Preview what will be created
-cdk synth
-
-# Deploy (requires Docker for Lambda bundling)
-cdk deploy
+cdk synth    # preview CloudFormation template
+cdk deploy   # requires Docker for Lambda bundling
 ```
 
 The deployment outputs:
@@ -177,36 +157,51 @@ The deployment outputs:
 - `DynamoTableName` — DynamoDB table name
 - `GatewayApiKeyId` — API Gateway key ID
 
-### 5. Retrieve the API Gateway key value
+### 5. Retrieve your API key
 
 ```bash
-# Get the key ID from the CDK output, then:
-aws apigateway get-api-key \
-  --api-key <GatewayApiKeyId> \
-  --include-value \
-  --query value --output text
+aws apigateway get-api-keys \
+  --include-values \
+  --query "items[?name=='trend-spotter-key'].value" \
+  --output text --region us-west-2
 ```
-
-> **Note:** The `X-API-Key` enforced by your FastAPI app (from SSM) and the API Gateway key are **separate**. The Gateway key is an additional layer; include it as `x-api-key` header (lowercase) for API Gateway, and `X-API-Key` for the FastAPI auth layer. For simplicity, use the same value for both by setting the API Gateway key value to match your SSM `/trend-spotter/api-key`.
 
 ### 6. Call the deployed API
 
 ```bash
-BASE_URL="https://<api-id>.execute-api.us-east-1.amazonaws.com/prod"
-API_KEY="your_api_key"
+BASE_URL="https://<api-id>.execute-api.us-west-2.amazonaws.com/prod"
+GW_KEY="<your-gateway-key>"
 
-# Refresh
+# Health check (no key needed)
+curl $BASE_URL/health
+
+# List categories
+curl -H "x-api-key: $GW_KEY" $BASE_URL/v1/categories
+
+# Refresh trends (costs DataForSEO credits)
 curl -X POST "$BASE_URL/v1/trends/refresh" \
   -H "Content-Type: application/json" \
-  -H "X-API-Key: $API_KEY" \
-  -H "x-api-key: $API_KEY" \
+  -H "x-api-key: $GW_KEY" \
   -d '{"category": "technology"}'
 
 # Read cache
 curl "$BASE_URL/v1/trends/current?category=technology&limit=20" \
-  -H "X-API-Key: $API_KEY" \
-  -H "x-api-key: $API_KEY"
+  -H "x-api-key: $GW_KEY"
 ```
+
+---
+
+## CI/CD (GitHub Actions)
+
+Push to `main` triggers the deploy workflow: Lint & Test → CDK Synth → CDK Deploy.
+
+Required GitHub repository secrets:
+| Secret | Description |
+|---|---|
+| `AWS_ACCESS_KEY_ID` | IAM user key with CDK deploy permissions |
+| `AWS_SECRET_ACCESS_KEY` | Corresponding secret |
+| `DATAFORSEO_LOGIN` | Written to SSM before deploy |
+| `DATAFORSEO_PASSWORD` | Written to SSM before deploy |
 
 ---
 
@@ -214,9 +209,9 @@ curl "$BASE_URL/v1/trends/current?category=technology&limit=20" \
 
 ### Authentication
 
-All endpoints (except `/health`) require:
+All endpoints except `/health` require the API Gateway key:
 ```
-X-API-Key: <your-api-key>
+x-api-key: <your-gateway-key>
 ```
 
 ### GET /v1/trends/current
@@ -242,7 +237,7 @@ Calls DataForSEO, persists results, returns fresh data. **Costs API credits.**
 }
 ```
 
-### Response Shape (both endpoints)
+### Response shape (both endpoints)
 
 ```json
 {
@@ -269,22 +264,19 @@ Lists all supported categories and their seed keywords.
 
 ### GET /health
 
-Public health check endpoint. Returns `{"status": "ok"}`.
+Public health check. Returns `{"status": "ok"}`. No API key required.
 
 ---
 
 ## How an Orchestrator Should Call This API
 
-1. **On startup / daily:** Call `POST /v1/trends/refresh` for each category you care about to populate the cache.
-2. **During blog generation:** Call `GET /v1/trends/current?category=<cat>&limit=10` to get trending topics cheaply (no DataForSEO cost).
-3. **Re-refresh** only when you want fresh data (e.g. weekly cron via your orchestrator, not a Lambda cron).
+1. **Weekly:** Call `POST /v1/trends/refresh` for each category to populate the cache.
+2. **During blog generation:** Call `GET /v1/trends/current?category=<cat>&limit=10` (no DataForSEO cost).
 
-Example orchestrator flow:
 ```
 categories = ["travel", "technology", "food"]
 for category in categories:
     POST /v1/trends/refresh {"category": category}   # ~once per week
-    # store returned topics for blog generation
 
 # On-demand during writing:
 GET /v1/trends/current?category=travel&limit=5
@@ -294,11 +286,11 @@ GET /v1/trends/current?category=travel&limit=5
 
 ## Cost Estimate
 
-| Resource       | Usage           | Cost           |
-|----------------|-----------------|----------------|
-| Lambda         | ~100 calls/mo   | ~$0.00         |
-| API Gateway    | ~100 calls/mo   | ~$0.00         |
-| DynamoDB       | PAY_PER_REQUEST | ~$0.01/mo      |
+| Resource       | Usage           | Cost                |
+|----------------|-----------------|---------------------|
+| Lambda         | ~100 calls/mo   | ~$0.00              |
+| API Gateway    | ~100 calls/mo   | ~$0.00              |
+| DynamoDB       | PAY_PER_REQUEST | ~$0.01/mo           |
 | DataForSEO     | Per refresh     | ~$0.01–0.05/refresh |
 
 For single-user weekly refreshes of 10 categories: **< $2/month total**.
@@ -312,4 +304,3 @@ cdk destroy
 ```
 
 > The DynamoDB table has `RemovalPolicy.RETAIN` — it will NOT be deleted automatically. Delete it manually in the console if needed.
-# trend-spotter
