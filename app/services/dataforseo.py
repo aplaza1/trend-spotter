@@ -63,98 +63,103 @@ def _make_client(settings: Settings) -> httpx.AsyncClient:
 # ──────────────────────────────────────────────────────────────────────────────
 # Response parsing helpers
 # ──────────────────────────────────────────────────────────────────────────────
+#
+# DataForSEO Google Trends Explore response structure:
+#
+#   task.result[0].items = [
+#     { "type": "google_trends_graph",
+#       "keywords": ["kw1", "kw2", ...],
+#       "data": [{"date_from": ..., "values": [v_kw1, v_kw2, ...]}, ...]
+#     },
+#     { "type": "google_trends_queries_top",
+#       "keywords": ["kw1"],
+#       "data": [{"query": "...", "value": 100}, ...]
+#     },
+#     { "type": "google_trends_queries_rising",
+#       "keywords": ["kw1"],
+#       "data": [{"query": "...", "value": 350}, ...]   # value = % increase
+#     },
+#     { "type": "google_trends_topics_top",   (optional)
+#       "data": [{"title": "...", "type": "...", "value": 100}, ...]
+#     },
+#     ...
+#   ]
 
-def _average_interest(items: list[dict]) -> float:
-    """Compute the mean interest value across all time buckets for one keyword."""
-    values = [
-        point.get("value", 0)
-        for item in items
-        for point in item.get("data", [])
-    ]
-    if not values:
-        return 0.0
-    return round(sum(values) / len(values), 2)
+
+def _parse_graph(item: dict) -> list[TopicItem]:
+    """Extract per-keyword average interest scores from a google_trends_graph item."""
+    keywords: list[str] = item.get("keywords") or []
+    data_points: list[dict] = item.get("data") or []
+    if not keywords or not data_points:
+        return []
+
+    # Accumulate values per keyword index
+    sums = [0.0] * len(keywords)
+    counts = [0] * len(keywords)
+    for point in data_points:
+        values = point.get("values") or []
+        for idx, val in enumerate(values):
+            if idx < len(keywords) and val is not None:
+                sums[idx] += val
+                counts[idx] += 1
+
+    topics = []
+    for idx, kw in enumerate(keywords):
+        score = round(sums[idx] / counts[idx], 2) if counts[idx] else 0.0
+        topics.append(TopicItem(
+            title=kw,
+            score=score,
+            rising_pct=None,
+            sources=["dataforseo"],
+            snippet=f"Avg interest over time: {score:.0f}/100",
+            related_queries=None,
+        ))
+    return topics
 
 
-def _parse_related_queries(related_queries: list[dict]) -> list[TopicItem]:
-    """Extract TopicItem records from DataForSEO related_queries.
-
-    Each element has:
-      {
-        "seed_keyword": "...",
-        "type": "rising" | "top",
-        "items": [ {"query": "...", "value": 123, ...}, ... ]
-      }
-    """
-    topics: list[TopicItem] = []
-
-    for group in related_queries:
-        query_type = group.get("type", "top")
-        for item in group.get("items") or []:
-            query = item.get("query", "").strip()
-            if not query:
-                continue
-            raw_value = item.get("value", 0)
-
-            # "rising" values can be huge (e.g. 50000 = breakout) — cap at 100
-            if query_type == "rising":
-                rising_pct = float(raw_value)
-                # Normalise score: breakout (very high) → 100, else proportional
-                score = 100.0 if raw_value == 0 else min(100.0, raw_value / 100)
-            else:
-                rising_pct = None
-                score = min(100.0, float(raw_value))
-
-            topics.append(
-                TopicItem(
-                    title=query,
-                    score=round(score, 2),
-                    rising_pct=rising_pct if query_type == "rising" else None,
-                    sources=["dataforseo"],
-                    snippet=f"{'Rising' if query_type == 'rising' else 'Top'} related search: {query}",
-                    related_queries=None,
-                )
-            )
-
+def _parse_queries(item: dict, is_rising: bool) -> list[TopicItem]:
+    """Extract TopicItems from google_trends_queries_top / _rising items."""
+    topics = []
+    for entry in item.get("data") or []:
+        query = (entry.get("query") or "").strip()
+        if not query:
+            continue
+        raw_value = entry.get("value") or 0
+        if is_rising:
+            rising_pct = float(raw_value)
+            score = min(100.0, raw_value / 100) if raw_value else 100.0
+        else:
+            rising_pct = None
+            score = min(100.0, float(raw_value))
+        topics.append(TopicItem(
+            title=query,
+            score=round(score, 2),
+            rising_pct=rising_pct,
+            sources=["dataforseo"],
+            snippet=f"{'Rising' if is_rising else 'Top'} related search: {query}",
+            related_queries=None,
+        ))
     return topics
 
 
 def _parse_result(result: dict) -> tuple[list[TopicItem], str]:
     """Parse a single DataForSEO task result into (topics, task_id)."""
     task_id = result.get("id", "unknown")
-    items: list[TopicItem] = []
+    topics: list[TopicItem] = []
 
     for res in result.get("result") or []:
-        # 1. Seed keyword scores from interest_over_time
-        interest_items = res.get("items") or []
-        for interest_item in interest_items:
-            keyword = interest_item.get("keyword", "").strip()
-            if not keyword:
-                continue
-            score = _average_interest([interest_item])
-            # Collect all related query strings for the snippet
-            related_q_raw = []
-            for rq_group in res.get("related_queries") or []:
-                for rq in rq_group.get("items") or []:
-                    q = rq.get("query", "").strip()
-                    if q:
-                        related_q_raw.append(q)
+        for item in res.get("items") or []:
+            item_type = item.get("type", "")
+            if item_type == "google_trends_graph":
+                topics.extend(_parse_graph(item))
+            elif item_type == "google_trends_queries_top":
+                topics.extend(_parse_queries(item, is_rising=False))
+            elif item_type == "google_trends_queries_rising":
+                topics.extend(_parse_queries(item, is_rising=True))
+            # google_trends_topics_* have a different shape; skip for now
 
-            items.append(
-                TopicItem(
-                    title=keyword,
-                    score=score,
-                    rising_pct=None,
-                    sources=["dataforseo"],
-                    snippet=f"Avg interest over time: {score:.0f}/100",
-                    related_queries=related_q_raw[:10] or None,
-                )
-            )
-
-        # 2. Related queries (rising + top)
-        items.extend(_parse_related_queries(res.get("related_queries") or []))
-
-    return items, task_id
+    logger.warning("Parsed %d topics from task %s", len(topics), task_id)
+    return topics, task_id
 
 
 def _deduplicate_and_rank(topics: list[TopicItem]) -> list[TopicItem]:
@@ -231,19 +236,6 @@ async def fetch_trends(
         )
         response.raise_for_status()
         payload: dict = response.json()
-
-    # Log response structure for debugging (not full payload to avoid log truncation)
-    for i, t in enumerate(payload.get("tasks") or []):
-        result_list = t.get("result") or []
-        for j, res in enumerate(result_list):
-            items = res.get("items") or []
-            item_types = [item.get("type") for item in items]
-            logger.info(
-                "DataForSEO task[%d] result[%d]: items=%d types=%s keys=%s",
-                i, j, len(items), item_types, list(res.keys())
-            )
-            for k, item in enumerate(items[:2]):  # log first 2 items in detail
-                logger.info("DataForSEO task[%d] result[%d] item[%d]: %s", i, j, k, item)
 
     # DataForSEO wraps errors inside the payload even on HTTP 200
     status_code = payload.get("status_code", 0)
