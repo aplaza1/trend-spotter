@@ -34,8 +34,9 @@ from app.models import TopicItem
 
 logger = logging.getLogger(__name__)
 
-# DataForSEO limits to 5 keywords per task — we chunk the seeds automatically.
-_MAX_KEYWORDS_PER_TASK = 5
+# Send one keyword per task so DataForSEO returns related queries for each.
+# Multi-keyword tasks only return the comparison graph with no related queries.
+_MAX_KEYWORDS_PER_TASK = 1
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -87,28 +88,21 @@ def _make_client(settings: Settings) -> httpx.AsyncClient:
 
 
 def _parse_graph(item: dict) -> list[TopicItem]:
-    """Extract per-keyword average interest scores from a google_trends_graph item."""
-    keywords: list[str] = item.get("keywords") or []
-    data_points: list[dict] = item.get("data") or []
-    if not keywords or not data_points:
-        return []
+    """Extract per-keyword average interest scores from a google_trends_graph item.
 
-    # Accumulate values per keyword index
-    sums = [0.0] * len(keywords)
-    counts = [0] * len(keywords)
-    for point in data_points:
-        values = point.get("values") or []
-        for idx, val in enumerate(values):
-            if idx < len(keywords) and val is not None:
-                sums[idx] += val
-                counts[idx] += 1
+    Uses the pre-computed `averages` field DataForSEO returns (0-100 per keyword).
+    """
+    keywords: list[str] = item.get("keywords") or []
+    averages: list = item.get("averages") or []
+    if not keywords:
+        return []
 
     topics = []
     for idx, kw in enumerate(keywords):
-        score = round(sums[idx] / counts[idx], 2) if counts[idx] else 0.0
+        score = float(averages[idx]) if idx < len(averages) and averages[idx] is not None else 0.0
         topics.append(TopicItem(
             title=kw,
-            score=score,
+            score=round(score, 2),
             rising_pct=None,
             sources=["dataforseo"],
             snippet=f"Avg interest over time: {score:.0f}/100",
@@ -158,16 +152,7 @@ def _parse_result(result: dict) -> tuple[list[TopicItem], str]:
                 topics.extend(_parse_queries(item, is_rising=True))
             # google_trends_topics_* have a different shape; skip for now
 
-    for res in result.get("result") or []:
-        for item in res.get("items") or []:
-            logger.warning(
-                "Item type=%s keywords=%s averages=%s data[0]=%s",
-                item.get("type"),
-                item.get("keywords"),
-                item.get("averages"),
-                (item.get("data") or [None])[0],
-            )
-    logger.warning("Task %s — parsed %d topics", task_id, len(topics))
+    logger.info("Task %s — parsed %d topics", task_id, len(topics))
     return topics, task_id
 
 
