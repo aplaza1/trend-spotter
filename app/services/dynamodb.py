@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 import time
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Any
 
 import aioboto3
@@ -99,7 +100,17 @@ class TrendRepository:
         now = datetime.now(timezone.utc)
         ttl = int(time.time()) + _TTL_SECONDS
 
-        serialised_topics = [t.model_dump() for t in topics]
+        def _to_decimal(obj: Any) -> Any:
+            """Recursively convert floats to Decimal (DynamoDB requirement)."""
+            if isinstance(obj, float):
+                return Decimal(str(obj))
+            if isinstance(obj, dict):
+                return {k: _to_decimal(v) for k, v in obj.items()}
+            if isinstance(obj, list):
+                return [_to_decimal(v) for v in obj]
+            return obj
+
+        serialised_topics = [_to_decimal(t.model_dump()) for t in topics]
 
         item: dict[str, Any] = {
             "pk": _pk(category),
