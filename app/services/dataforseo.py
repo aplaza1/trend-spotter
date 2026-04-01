@@ -32,6 +32,7 @@ import httpx
 
 from app.config import Settings, get_settings, resolve_region, CATEGORIES
 from app.models import TopicItem
+from app.services.reddit import fetch_reddit_topics
 
 logger = logging.getLogger(__name__)
 
@@ -130,7 +131,7 @@ def _parse_queries(item: dict, is_rising: bool) -> list[TopicItem]:
         raw_value = entry.get("value") or 0
         if is_rising:
             rising_pct = float(raw_value)
-            score = min(100.0, raw_value / 100) if raw_value else 100.0
+            score = min(100.0, 50.0 + (raw_value ** 0.4)) if raw_value else 100.0
         else:
             rising_pct = None
             score = min(100.0, float(raw_value))
@@ -140,6 +141,38 @@ def _parse_queries(item: dict, is_rising: bool) -> list[TopicItem]:
             rising_pct=rising_pct,
             sources=["dataforseo"],
             snippet=f"{'Rising' if is_rising else 'Top'} related search: {query}",
+            related_queries=None,
+        ))
+    return topics
+
+
+def _parse_topics(item: dict, is_rising: bool) -> list[TopicItem]:
+    """Extract TopicItems from google_trends_topics_top / _rising items.
+
+    Topic entities differ from query items: they use a 'title' key instead of
+    'query' and may carry an entity type string (e.g. 'Topic', 'City', 'Person').
+    """
+    topics = []
+    for entry in item.get("data") or []:
+        title = (entry.get("title") or "").strip()
+        if not title:
+            continue
+        raw_value = entry.get("value") or 0
+        entity_type = entry.get("type", "")
+        if is_rising:
+            rising_pct = float(raw_value)
+            # raw_value is % increase; map to 0-100 using power curve so high
+            # values (e.g. 450%) score meaningfully (≈82) instead of being buried.
+            score = min(100.0, 50.0 + (raw_value ** 0.4)) if raw_value else 100.0
+        else:
+            rising_pct = None
+            score = min(100.0, float(raw_value))
+        topics.append(TopicItem(
+            title=title,
+            score=round(score, 2),
+            rising_pct=rising_pct,
+            sources=["dataforseo"],
+            snippet=f"{'Rising' if is_rising else 'Top'} related topic ({entity_type}): {title}",
             related_queries=None,
         ))
     return topics
@@ -159,7 +192,10 @@ def _parse_result(result: dict) -> tuple[list[TopicItem], str]:
                 topics.extend(_parse_queries(item, is_rising=False))
             elif item_type == "google_trends_queries_rising":
                 topics.extend(_parse_queries(item, is_rising=True))
-            # google_trends_topics_* have a different shape; skip for now
+            elif item_type == "google_trends_topics_top":
+                topics.extend(_parse_topics(item, is_rising=False))
+            elif item_type == "google_trends_topics_rising":
+                topics.extend(_parse_topics(item, is_rising=True))
 
     logger.info("Task %s — parsed %d topics", task_id, len(topics))
     return topics, task_id
@@ -216,6 +252,7 @@ async def fetch_trends(
             "keywords": [keyword],
             "type": "web",
             "language_name": "English",
+            "date_range": "past_30_days",
         }
         if location_name:
             task["location_name"] = location_name
@@ -277,6 +314,16 @@ async def fetch_trends(
         else:
             all_topics.extend(result)
 
+    # Merge Reddit topics (run after DataForSEO; ~2-3s, well within Lambda timeout)
+    try:
+        reddit_topics = await fetch_reddit_topics(category)
+        all_topics.extend(reddit_topics)
+    except Exception as exc:
+        logger.warning("Reddit fetch failed for category=%s: %s", category, exc)
+
     ranked = _deduplicate_and_rank(all_topics)
-    logger.info("DataForSEO returned %d unique topics for category=%s", len(ranked), category)
+    logger.info(
+        "Merged %d unique topics for category=%s (datasources: dataforseo + reddit)",
+        len(ranked), category,
+    )
     return ranked, last_task_id
