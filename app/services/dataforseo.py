@@ -34,10 +34,6 @@ from app.models import TopicItem
 
 logger = logging.getLogger(__name__)
 
-# Send one keyword per task so DataForSEO returns related queries for each.
-# Multi-keyword tasks only return the comparison graph with no related queries.
-_MAX_KEYWORDS_PER_TASK = 1
-
 
 # ──────────────────────────────────────────────────────────────────────────────
 # HTTP client helpers
@@ -202,57 +198,56 @@ async def fetch_trends(
     # "Worldwide" / global → omit location_name entirely (DataForSEO rejects it)
     location_name: str | None = None if resolved == "Worldwide" else resolved
 
-    # Build payload — chunk seeds into groups of _MAX_KEYWORDS_PER_TASK
-    tasks_payload = []
-    for i in range(0, len(seeds), _MAX_KEYWORDS_PER_TASK):
-        chunk = seeds[i : i + _MAX_KEYWORDS_PER_TASK]
+    def _build_task(keyword: str) -> dict:
         task: dict = {
-            "keywords": chunk,
+            "keywords": [keyword],
             "type": "web",
             "language_name": "English",
-            # date_from / date_to omitted → DataForSEO uses its default (last 12 months)
         }
         if location_name:
             task["location_name"] = location_name
-        tasks_payload.append(task)
+        return task
 
     logger.info(
-        "Calling DataForSEO for category=%s location=%s tasks=%d",
+        "Calling DataForSEO for category=%s location=%s seeds=%d",
         category,
         location_name or "Worldwide",
-        len(tasks_payload),
+        len(seeds),
     )
-
-    async with _make_client(settings) as client:
-        response = await client.post(
-            "/v3/keywords_data/google_trends/explore/live",
-            json=tasks_payload,
-        )
-        response.raise_for_status()
-        payload: dict = response.json()
-
-    # DataForSEO wraps errors inside the payload even on HTTP 200
-    status_code = payload.get("status_code", 0)
-    if status_code not in (20000, 20100):
-        raise RuntimeError(
-            f"DataForSEO error {status_code}: {payload.get('status_message', 'unknown')}"
-        )
 
     all_topics: list[TopicItem] = []
     last_task_id = "unknown"
 
-    for task in payload.get("tasks") or []:
-        task_status = task.get("status_code", 0)
-        logger.warning(
-            "DataForSEO task %s status=%s msg=%s result_count=%s",
-            task.get("id"), task_status, task.get("status_message"),
-            task.get("result_count"),
-        )
-        if task_status not in (20000, 20100):
-            continue
-        topics, task_id = _parse_result(task)
-        all_topics.extend(topics)
-        last_task_id = task_id
+    # One API call per seed keyword — batching multiple tasks in one request
+    # causes DataForSEO to return 40401 "Task Not Found" for all tasks.
+    async with _make_client(settings) as client:
+        for seed in seeds:
+            response = await client.post(
+                "/v3/keywords_data/google_trends/explore/live",
+                json=[_build_task(seed)],
+            )
+            response.raise_for_status()
+            payload: dict = response.json()
+
+            status_code = payload.get("status_code", 0)
+            if status_code not in (20000, 20100):
+                logger.warning(
+                    "DataForSEO error for seed '%s': %s %s",
+                    seed, status_code, payload.get("status_message"),
+                )
+                continue
+
+            for task in payload.get("tasks") or []:
+                task_status = task.get("status_code", 0)
+                if task_status not in (20000, 20100):
+                    logger.warning(
+                        "DataForSEO task %s failed for seed '%s': %s",
+                        task.get("id"), seed, task.get("status_message"),
+                    )
+                    continue
+                topics, task_id = _parse_result(task)
+                all_topics.extend(topics)
+                last_task_id = task_id
 
     ranked = _deduplicate_and_rank(all_topics)
     logger.info("DataForSEO returned %d unique topics for category=%s", len(ranked), category)
