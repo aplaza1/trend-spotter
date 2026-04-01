@@ -13,6 +13,7 @@ env:
   AWS_REGION: us-west-2
   PYTHON_VERSION: "3.12"
   NODE_VERSION: "20"
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   # ──────────────────────────────────────────────────────────────────────────
@@ -140,6 +141,21 @@ jobs:
           cdk bootstrap aws://${ACCOUNT_ID}/${{ env.AWS_REGION }} --quiet
         env:
           CDK_DEFAULT_REGION: ${{ env.AWS_REGION }}
+
+      - name: Write SSM parameters from secrets
+        run: |
+          aws ssm put-parameter \
+            --name /trend-spotter/dataforseo-login \
+            --value "${{ secrets.DATAFORSEO_LOGIN }}" \
+            --type SecureString --overwrite
+          aws ssm put-parameter \
+            --name /trend-spotter/dataforseo-password \
+            --value "${{ secrets.DATAFORSEO_PASSWORD }}" \
+            --type SecureString --overwrite
+          aws ssm put-parameter \
+            --name /trend-spotter/api-key \
+            --value "${{ secrets.TREND_SPOTTER_API_KEY }}" \
+            --type SecureString --overwrite
 
       - name: CDK Deploy
         run: cdk deploy --require-approval never --outputs-file cdk-outputs.json

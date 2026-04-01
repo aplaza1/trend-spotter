@@ -6,7 +6,6 @@ AWS CDK v2 stack for the Trend Spotter API.
 Resources created
 ─────────────────
   • DynamoDB table (single-table design, PAY_PER_REQUEST, TTL enabled)
-  • SSM Parameter Store entries for DataForSEO creds and API key (SecureString)
   • Lambda function (Python 3.12, bundled with pip)
   • Lambda IAM role with least-privilege permissions
   • API Gateway v1 (REST) with:
@@ -15,12 +14,23 @@ Resources created
       – CloudWatch access logging
   • CloudWatch Log Group for Lambda
 
-Prerequisites
-─────────────
-  1. Install CDK deps:  pip install -r requirements-cdk.txt
-  2. Bootstrap your account once:  cdk bootstrap aws://<ACCOUNT>/<REGION>
-  3. Set credentials as SSM SecureStrings BEFORE deploying (see README).
-  4. Deploy:  cdk deploy
+SSM parameters (NOT managed by CDK — created externally before first deploy)
+─────────────────────────────────────────────────────────────────────────────
+  /trend-spotter/dataforseo-login     SecureString
+  /trend-spotter/dataforseo-password  SecureString
+  /trend-spotter/api-key              SecureString
+
+  In GitHub Actions these are written from repo secrets before cdk deploy.
+  CloudFormation resolves them via {{resolve:ssm:...}} at deploy time and
+  injects them directly into the Lambda environment — the Lambda itself never
+  calls SSM at runtime.
+
+Prerequisites (local deploy)
+─────────────────────────────
+  1. pip install -r requirements-cdk.txt
+  2. Write the three SSM params (see README).
+  3. cdk bootstrap aws://<ACCOUNT>/<REGION>   (once per account/region)
+  4. cdk deploy
 """
 
 from __future__ import annotations
@@ -66,42 +76,26 @@ class TrendSpotterStack(Stack):
             point_in_time_recovery=True,
         )
 
-        # ── SSM Parameters ────────────────────────────────────────────────────
-        # These are created as placeholders — you MUST update them in the
-        # AWS Console or via AWS CLI before the Lambda can function:
+        # ── SSM Parameters (pre-existing, managed outside CDK) ───────────────
+        # These parameters must exist in SSM before deploying this stack.
+        # In GitHub Actions they are written from repo secrets before cdk deploy.
+        # Locally, create them once with:
         #
-        #   aws ssm put-parameter \
-        #     --name /trend-spotter/dataforseo-login \
-        #     --value "YOUR_LOGIN" \
-        #     --type SecureString --overwrite
-        #
-        # (Repeat for dataforseo-password and api-key.)
+        #   aws ssm put-parameter --name /trend-spotter/dataforseo-login \
+        #     --value "YOUR_LOGIN" --type SecureString --overwrite
+        #   aws ssm put-parameter --name /trend-spotter/dataforseo-password \
+        #     --value "YOUR_PASS" --type SecureString --overwrite
+        #   aws ssm put-parameter --name /trend-spotter/api-key \
+        #     --value "YOUR_KEY" --type SecureString --overwrite
 
-        dataforseo_login_param = ssm.StringParameter(
-            self,
-            "DataForSEOLogin",
-            parameter_name="/trend-spotter/dataforseo-login",
-            string_value="PLACEHOLDER_UPDATE_ME",
-            description="DataForSEO API login email",
-            tier=ssm.ParameterTier.STANDARD,
+        dataforseo_login_param = ssm.StringParameter.from_string_parameter_name(
+            self, "DataForSEOLogin", "/trend-spotter/dataforseo-login"
         )
-
-        dataforseo_password_param = ssm.StringParameter(
-            self,
-            "DataForSEOPassword",
-            parameter_name="/trend-spotter/dataforseo-password",
-            string_value="PLACEHOLDER_UPDATE_ME",
-            description="DataForSEO API password (store as SecureString after deploy)",
-            tier=ssm.ParameterTier.STANDARD,
+        dataforseo_password_param = ssm.StringParameter.from_string_parameter_name(
+            self, "DataForSEOPassword", "/trend-spotter/dataforseo-password"
         )
-
-        api_key_param = ssm.StringParameter(
-            self,
-            "TrendSpotterAPIKey",
-            parameter_name="/trend-spotter/api-key",
-            string_value="PLACEHOLDER_UPDATE_ME",
-            description="Static API key for X-API-Key header authentication",
-            tier=ssm.ParameterTier.STANDARD,
+        api_key_param = ssm.StringParameter.from_string_parameter_name(
+            self, "TrendSpotterAPIKey", "/trend-spotter/api-key"
         )
 
         # ── Lambda IAM role ───────────────────────────────────────────────────
