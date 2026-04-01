@@ -87,16 +87,28 @@ def _make_client(settings: Settings) -> httpx.AsyncClient:
 def _parse_graph(item: dict) -> list[TopicItem]:
     """Extract per-keyword average interest scores from a google_trends_graph item.
 
-    Uses the pre-computed `averages` field DataForSEO returns (0-100 per keyword).
+    Uses the pre-computed `averages` field when available (multi-keyword requests).
+    Falls back to computing from time series data (single-keyword requests return
+    averages=[]).
     """
     keywords: list[str] = item.get("keywords") or []
     averages: list = item.get("averages") or []
+    data_points: list[dict] = item.get("data") or []
     if not keywords:
         return []
 
     topics = []
     for idx, kw in enumerate(keywords):
-        score = float(averages[idx]) if idx < len(averages) and averages[idx] is not None else 0.0
+        if idx < len(averages) and averages[idx] is not None:
+            score = float(averages[idx])
+        else:
+            # Compute from time series values (single-keyword requests)
+            vals = [
+                pt["values"][idx]
+                for pt in data_points
+                if pt.get("values") and idx < len(pt["values"]) and pt["values"][idx] is not None
+            ]
+            score = round(sum(vals) / len(vals), 2) if vals else 0.0
         topics.append(TopicItem(
             title=kw,
             score=round(score, 2),
