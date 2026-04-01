@@ -13,7 +13,6 @@ env:
   AWS_REGION: us-west-2
   PYTHON_VERSION: "3.12"
   NODE_VERSION: "20"
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   # ──────────────────────────────────────────────────────────────────────────
@@ -25,10 +24,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python ${{ env.PYTHON_VERSION }}
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
@@ -64,17 +63,17 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python ${{ env.PYTHON_VERSION }}
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
           cache-dependency-path: requirements-cdk.txt
 
       - name: Set up Node.js (required by CDK CLI)
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -108,24 +107,24 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Set up Python ${{ env.PYTHON_VERSION }}
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
           cache-dependency-path: requirements-cdk.txt
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -147,15 +146,15 @@ jobs:
           aws ssm put-parameter \
             --name /trend-spotter/dataforseo-login \
             --value "${{ secrets.DATAFORSEO_LOGIN }}" \
-            --type SecureString --overwrite
+            --type String --overwrite
           aws ssm put-parameter \
             --name /trend-spotter/dataforseo-password \
             --value "${{ secrets.DATAFORSEO_PASSWORD }}" \
-            --type SecureString --overwrite
+            --type String --overwrite
           aws ssm put-parameter \
             --name /trend-spotter/api-key \
             --value "${{ secrets.TREND_SPOTTER_API_KEY }}" \
-            --type SecureString --overwrite
+            --type String --overwrite
 
       - name: CDK Deploy
         run: cdk deploy --require-approval never --outputs-file cdk-outputs.json
