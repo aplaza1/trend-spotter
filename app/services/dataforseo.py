@@ -232,7 +232,18 @@ async def fetch_trends(
         response.raise_for_status()
         payload: dict = response.json()
 
-    logger.info("DataForSEO raw response: %s", payload)
+    # Log response structure for debugging (not full payload to avoid log truncation)
+    for i, t in enumerate(payload.get("tasks") or []):
+        result_list = t.get("result") or []
+        for j, res in enumerate(result_list):
+            items = res.get("items") or []
+            item_types = [item.get("type") for item in items]
+            logger.info(
+                "DataForSEO task[%d] result[%d]: items=%d types=%s keys=%s",
+                i, j, len(items), item_types, list(res.keys())
+            )
+            for k, item in enumerate(items[:2]):  # log first 2 items in detail
+                logger.info("DataForSEO task[%d] result[%d] item[%d]: %s", i, j, k, item)
 
     # DataForSEO wraps errors inside the payload even on HTTP 200
     status_code = payload.get("status_code", 0)
