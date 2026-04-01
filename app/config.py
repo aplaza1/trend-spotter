@@ -167,11 +167,6 @@ class Settings(BaseSettings):
     dataforseo_login: str = ""
     dataforseo_password: str = ""
 
-    # Reddit OAuth credentials (script app, client_credentials flow)
-    # Create a free app at https://www.reddit.com/prefs/apps
-    reddit_client_id: str = ""
-    reddit_client_secret: str = ""
-
     # AWS
     dynamodb_table_name: str = "trend-spotter"
     aws_region: str = "us-east-1"

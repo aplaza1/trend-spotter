@@ -32,7 +32,7 @@ import httpx
 
 from app.config import Settings, get_settings, resolve_region, CATEGORIES
 from app.models import TopicItem
-from app.services.reddit import fetch_reddit_topics
+from app.services.googlenews import fetch_news_topics
 
 logger = logging.getLogger(__name__)
 
@@ -314,20 +314,16 @@ async def fetch_trends(
         else:
             all_topics.extend(result)
 
-    # Merge Reddit topics (run after DataForSEO; ~2-3s, well within Lambda timeout)
+    # Merge Google News topics (run after DataForSEO; ~1-2s, well within Lambda timeout)
     try:
-        reddit_topics = await fetch_reddit_topics(
-            category,
-            client_id=settings.reddit_client_id,
-            client_secret=settings.reddit_client_secret,
-        )
-        all_topics.extend(reddit_topics)
+        news_topics = await fetch_news_topics(category)
+        all_topics.extend(news_topics)
     except Exception as exc:
-        logger.warning("Reddit fetch failed for category=%s: %s", category, exc)
+        logger.warning("Google News fetch failed for category=%s: %s", category, exc)
 
     ranked = _deduplicate_and_rank(all_topics)
     logger.info(
-        "Merged %d unique topics for category=%s (datasources: dataforseo + reddit)",
+        "Merged %d unique topics for category=%s (sources: dataforseo + googlenews)",
         len(ranked), category,
     )
     return ranked, last_task_id

@@ -92,12 +92,6 @@ class TrendSpotterStack(Stack):
         dataforseo_password_param = ssm.StringParameter.from_string_parameter_name(
             self, "DataForSEOPassword", "/trend-spotter/dataforseo-password"
         )
-        reddit_client_id_param = ssm.StringParameter.from_string_parameter_name(
-            self, "RedditClientId", "/trend-spotter/reddit-client-id"
-        )
-        reddit_client_secret_param = ssm.StringParameter.from_string_parameter_name(
-            self, "RedditClientSecret", "/trend-spotter/reddit-client-secret"
-        )
 
         # ── Lambda IAM role ───────────────────────────────────────────────────
 
@@ -115,7 +109,7 @@ class TrendSpotterStack(Stack):
         # DynamoDB access
         table.grant_read_write_data(lambda_role)
 
-        # SSM read access for DataForSEO and Reddit credentials
+        # SSM read access for DataForSEO credentials
         lambda_role.add_to_policy(
             iam.PolicyStatement(
                 effect=iam.Effect.ALLOW,
@@ -123,8 +117,6 @@ class TrendSpotterStack(Stack):
                 resources=[
                     dataforseo_login_param.parameter_arn,
                     dataforseo_password_param.parameter_arn,
-                    reddit_client_id_param.parameter_arn,
-                    reddit_client_secret_param.parameter_arn,
                 ],
             )
         )
@@ -176,12 +168,6 @@ class TrendSpotterStack(Stack):
                 ),
                 "DATAFORSEO_PASSWORD": ssm.StringParameter.value_for_string_parameter(
                     self, "/trend-spotter/dataforseo-password"
-                ),
-                "REDDIT_CLIENT_ID": ssm.StringParameter.value_for_string_parameter(
-                    self, "/trend-spotter/reddit-client-id"
-                ),
-                "REDDIT_CLIENT_SECRET": ssm.StringParameter.value_for_string_parameter(
-                    self, "/trend-spotter/reddit-client-secret"
                 ),
                 "AWS_REGION_NAME": self.region,
                 "ROOT_PATH": "/prod",
