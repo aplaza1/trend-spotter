@@ -10,10 +10,10 @@ Endpoint: https://news.google.com/rss/search?q={query}&hl=en-US&gl=US&ceid=US:en
 
 Parsing strategy
 ────────────────
-For each category we run 2-3 focused queries in parallel (e.g. "digital nomad
-travel tips" for the travel category). Each query returns up to 10 recent
-articles. We extract the <title> of each article as a topic and score by
-recency (most recent = highest score, linearly decaying to 0).
+For each category we run 2-3 focused queries in parallel. Each query returns
+up to 10 recent articles. We extract the <title>, filter for on-topic results
+using a per-category keyword allowlist, cap the score at 70 (so DataForSEO
+search-intent topics can compete), and truncate long headlines to 80 chars.
 """
 
 from __future__ import annotations
@@ -31,7 +31,6 @@ from app.models import TopicItem
 logger = logging.getLogger(__name__)
 
 # Per-category Google News search queries.
-# Use specific, actionable phrases that surface current articles.
 NEWS_QUERIES: dict[str, list[str]] = {
     "travel":         ["hidden gem travel destinations", "budget travel tips", "solo travel guide"],
     "technology":     ["AI tools 2025", "open source AI models", "tech trends"],
@@ -45,12 +44,35 @@ NEWS_QUERIES: dict[str, list[str]] = {
     "sustainability": ["zero waste tips", "sustainable living", "eco friendly home"],
 }
 
+# Per-category keyword allowlist for relevance filtering.
+# Articles whose titles contain none of these keywords are dropped.
+CATEGORY_KEYWORDS: dict[str, list[str]] = {
+    "travel":         ["travel", "trip", "destination", "tourist", "backpack", "nomad", "vacation", "flight", "hotel"],
+    "technology":     ["ai", "tech", "software", "model", "llm", "chip", "robot", "machine learning", "startup", "open source"],
+    "food":           ["food", "recipe", "meal", "cook", "eat", "diet", "nutrition", "restaurant", "ingredient"],
+    "health":         ["health", "weight", "mental", "gut", "sleep", "wellness", "medical", "fitness", "doctor"],
+    "finance":        ["invest", "stock", "market", "finance", "money", "crypto", "bitcoin", "savings", "etf", "dividend"],
+    "fitness":        ["workout", "exercise", "fitness", "gym", "training", "run", "strength", "yoga", "hiit"],
+    "beauty":         ["skin", "beauty", "makeup", "hair", "moistur", "serum", "cosmetic", "routine", "cleanser"],
+    "parenting":      ["parent", "child", "baby", "toddler", "kid", "school", "family", "infant", "mom", "dad"],
+    "pets":           ["dog", "cat", "pet", "puppy", "kitten", "vet", "animal", "breed", "train"],
+    "sustainability": ["sustain", "eco", "green", "climate", "recycle", "renewable", "solar", "electric", "zero waste"],
+}
+
 _BASE_URL = "https://news.google.com/rss/search"
-_MAX_AGE_DAYS = 30  # ignore articles older than this
+_MAX_AGE_DAYS = 30   # ignore articles older than this
+_MAX_NEWS_SCORE = 70  # cap so DataForSEO search-intent topics (~30-70) can compete
+_MAX_TITLE_LEN = 80  # truncate long headlines at word boundary
 
 
-def _parse_feed(xml_text: str, query: str) -> list[TopicItem]:
-    """Parse a Google News RSS feed and return TopicItems scored by recency."""
+def _parse_feed(xml_text: str, query: str, category: str) -> list[TopicItem]:
+    """Parse a Google News RSS feed and return TopicItems scored by recency.
+
+    Applies:
+      - Category keyword filter (drops off-topic articles)
+      - Score cap at _MAX_NEWS_SCORE
+      - Title truncation at _MAX_TITLE_LEN chars
+    """
     try:
         root = ET.fromstring(xml_text)
     except ET.ParseError as exc:
@@ -61,6 +83,7 @@ def _parse_feed(xml_text: str, query: str) -> list[TopicItem]:
     if channel is None:
         return []
 
+    keywords = CATEGORY_KEYWORDS.get(category, [])
     items = channel.findall("item")
     now = datetime.now(timezone.utc)
     topics = []
@@ -69,23 +92,29 @@ def _parse_feed(xml_text: str, query: str) -> list[TopicItem]:
         title_el = item.find("title")
         if title_el is None or not title_el.text:
             continue
-        # Google News titles are often "Headline - Source Name"; strip the source.
+        # Strip trailing "- Source Name" appended by Google News
         title = title_el.text.rsplit(" - ", 1)[0].strip()
         if not title:
             continue
 
-        # Score by recency: most recent article in the feed scores 100,
-        # linearly decaying to ~30 for the 10th item.
+        # Relevance filter: drop articles with no category keyword in the title
+        if keywords and not any(kw in title.lower() for kw in keywords):
+            continue
+
+        # Truncate long headlines at word boundary
+        if len(title) > _MAX_TITLE_LEN:
+            title = title[:_MAX_TITLE_LEN].rsplit(" ", 1)[0] + "…"
+
+        # Score by recency: decay from _MAX_NEWS_SCORE → 10 over 30 days
         pub_date_el = item.find("pubDate")
-        age_score = 100.0 - rank * 7  # position-based fallback
+        age_score = _MAX_NEWS_SCORE - rank * 5  # position-based fallback
         if pub_date_el is not None and pub_date_el.text:
             try:
                 pub_dt = parsedate_to_datetime(pub_date_el.text)
                 age_hours = (now - pub_dt).total_seconds() / 3600
                 if age_hours > _MAX_AGE_DAYS * 24:
                     continue  # skip stale articles
-                # Decay from 100 → 10 over 30 days
-                age_score = max(10.0, 100.0 - (age_hours / (_MAX_AGE_DAYS * 24)) * 90)
+                age_score = max(10.0, _MAX_NEWS_SCORE - (age_hours / (_MAX_AGE_DAYS * 24)) * 60)
             except Exception:
                 pass  # use position-based score
 
@@ -127,7 +156,7 @@ async def fetch_news_topics(category: str) -> list[TopicItem]:
         try:
             resp = await client.get(_BASE_URL, params=params)
             resp.raise_for_status()
-            return _parse_feed(resp.text, query)
+            return _parse_feed(resp.text, query, category)
         except Exception as exc:
             logger.warning("Google News fetch failed for query '%s': %s", query, exc)
             return []

@@ -175,7 +175,7 @@ class Settings(BaseSettings):
     dataforseo_base_url: str = "https://api.dataforseo.com"
 
     # Behaviour
-    default_limit: int = 20
+    default_limit: int = 3
     max_limit: int = 50
 
     # Simple in-memory rate-limit for single-user (refresh calls per minute)
