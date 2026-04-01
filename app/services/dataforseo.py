@@ -243,12 +243,12 @@ async def fetch_trends(
 
     for task in payload.get("tasks") or []:
         task_status = task.get("status_code", 0)
+        logger.warning(
+            "DataForSEO task %s status=%s msg=%s result_count=%s",
+            task.get("id"), task_status, task.get("status_message"),
+            task.get("result_count"),
+        )
         if task_status not in (20000, 20100):
-            logger.warning(
-                "DataForSEO task %s failed: %s",
-                task.get("id"),
-                task.get("status_message"),
-            )
             continue
         topics, task_id = _parse_result(task)
         all_topics.extend(topics)
