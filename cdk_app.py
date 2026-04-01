@@ -14,6 +14,8 @@ Set your target account and region via environment variables:
 Or hardcode them below (not recommended for shared repos).
 """
 
+import os
+
 import aws_cdk as cdk
 
 from cdk_stack import TrendSpotterStack
@@ -24,8 +26,8 @@ TrendSpotterStack(
     app,
     "TrendSpotterStack",
     env=cdk.Environment(
-        account=app.node.try_get_context("account") or None,
-        region=app.node.try_get_context("region") or "us-east-1",
+        account=app.node.try_get_context("account") or os.environ.get("CDK_DEFAULT_ACCOUNT"),
+        region=app.node.try_get_context("region") or os.environ.get("CDK_DEFAULT_REGION") or "us-east-1",
     ),
     description="Trend Spotter API – serverless FastAPI on Lambda + API Gateway + DynamoDB",
 )
