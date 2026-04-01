@@ -199,26 +199,28 @@ async def fetch_trends(
 
     cat_cfg = CATEGORIES[category]
     seeds: list[str] = cat_cfg["seeds"]
-    location_name = resolve_region(region) if region != "global" else cat_cfg["default_region"]
+    resolved = resolve_region(region)
+    # "Worldwide" / global → omit location_name entirely (DataForSEO rejects it)
+    location_name: str | None = None if resolved == "Worldwide" else resolved
 
     # Build payload — chunk seeds into groups of _MAX_KEYWORDS_PER_TASK
     tasks_payload = []
     for i in range(0, len(seeds), _MAX_KEYWORDS_PER_TASK):
         chunk = seeds[i : i + _MAX_KEYWORDS_PER_TASK]
-        tasks_payload.append(
-            {
-                "keywords": chunk,
-                "location_name": location_name,
-                "type": "web",
-                "language_name": "English",
-                # date_from / date_to omitted → DataForSEO uses its default (last 12 months)
-            }
-        )
+        task: dict = {
+            "keywords": chunk,
+            "type": "web",
+            "language_name": "English",
+            # date_from / date_to omitted → DataForSEO uses its default (last 12 months)
+        }
+        if location_name:
+            task["location_name"] = location_name
+        tasks_payload.append(task)
 
     logger.info(
-        "Calling DataForSEO for category=%s region=%s tasks=%d",
+        "Calling DataForSEO for category=%s location=%s tasks=%d",
         category,
-        location_name,
+        location_name or "Worldwide",
         len(tasks_payload),
     )
 
