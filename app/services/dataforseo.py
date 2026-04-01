@@ -162,6 +162,7 @@ def _parse_result(result: dict) -> tuple[list[TopicItem], str]:
     for res in result.get("result") or []:
         for item in res.get("items") or []:
             item_types_found.append(item.get("type"))
+            logger.warning("Item keys: %s", list(item.keys()))
     logger.warning("Task %s item types: %s — parsed %d topics", task_id, item_types_found, len(topics))
     return topics, task_id
 
