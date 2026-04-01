@@ -232,6 +232,8 @@ async def fetch_trends(
         response.raise_for_status()
         payload: dict = response.json()
 
+    logger.info("DataForSEO raw response: %s", payload)
+
     # DataForSEO wraps errors inside the payload even on HTTP 200
     status_code = payload.get("status_code", 0)
     if status_code not in (20000, 20100):
