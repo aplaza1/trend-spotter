@@ -151,6 +151,14 @@ jobs:
             --name /trend-spotter/dataforseo-password \
             --value "${{ secrets.DATAFORSEO_PASSWORD }}" \
             --type String --overwrite
+          aws ssm put-parameter \
+            --name /trend-spotter/reddit-client-id \
+            --value "${{ secrets.REDDIT_CLIENT_ID }}" \
+            --type String --overwrite
+          aws ssm put-parameter \
+            --name /trend-spotter/reddit-client-secret \
+            --value "${{ secrets.REDDIT_CLIENT_SECRET }}" \
+            --type String --overwrite
       - name: CDK Deploy
         run: cdk deploy --require-approval never --outputs-file cdk-outputs.json
         env:

@@ -316,7 +316,11 @@ async def fetch_trends(
 
     # Merge Reddit topics (run after DataForSEO; ~2-3s, well within Lambda timeout)
     try:
-        reddit_topics = await fetch_reddit_topics(category)
+        reddit_topics = await fetch_reddit_topics(
+            category,
+            client_id=settings.reddit_client_id,
+            client_secret=settings.reddit_client_secret,
+        )
         all_topics.extend(reddit_topics)
     except Exception as exc:
         logger.warning("Reddit fetch failed for category=%s: %s", category, exc)
