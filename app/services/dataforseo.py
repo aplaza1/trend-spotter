@@ -158,7 +158,11 @@ def _parse_result(result: dict) -> tuple[list[TopicItem], str]:
                 topics.extend(_parse_queries(item, is_rising=True))
             # google_trends_topics_* have a different shape; skip for now
 
-    logger.warning("Parsed %d topics from task %s", len(topics), task_id)
+    item_types_found = []
+    for res in result.get("result") or []:
+        for item in res.get("items") or []:
+            item_types_found.append(item.get("type"))
+    logger.warning("Task %s item types: %s — parsed %d topics", task_id, item_types_found, len(topics))
     return topics, task_id
 
 
