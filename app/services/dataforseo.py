@@ -23,6 +23,7 @@ We build TopicItem records from two sources and merge them:
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import logging
 from typing import Any
@@ -218,36 +219,51 @@ async def fetch_trends(
     all_topics: list[TopicItem] = []
     last_task_id = "unknown"
 
-    # One API call per seed keyword — batching multiple tasks in one request
-    # causes DataForSEO to return 40401 "Task Not Found" for all tasks.
-    async with _make_client(settings) as client:
-        for seed in seeds:
-            response = await client.post(
-                "/v3/keywords_data/google_trends/explore/live",
-                json=[_build_task(seed)],
-            )
-            response.raise_for_status()
-            payload: dict = response.json()
+    # One API call per seed, all fired in parallel so total latency ≈ max(individual).
+    # Batching multiple tasks in one request causes DataForSEO to return 40401
+    # "Task Not Found" for all tasks.
+    async def _fetch_seed(client: httpx.AsyncClient, seed: str) -> list[TopicItem]:
+        nonlocal last_task_id
+        response = await client.post(
+            "/v3/keywords_data/google_trends/explore/live",
+            json=[_build_task(seed)],
+        )
+        response.raise_for_status()
+        payload: dict = response.json()
 
-            status_code = payload.get("status_code", 0)
-            if status_code not in (20000, 20100):
+        status_code = payload.get("status_code", 0)
+        if status_code not in (20000, 20100):
+            logger.warning(
+                "DataForSEO error for seed '%s': %s %s",
+                seed, status_code, payload.get("status_message"),
+            )
+            return []
+
+        results = []
+        for task in payload.get("tasks") or []:
+            task_status = task.get("status_code", 0)
+            if task_status not in (20000, 20100):
                 logger.warning(
-                    "DataForSEO error for seed '%s': %s %s",
-                    seed, status_code, payload.get("status_message"),
+                    "DataForSEO task %s failed for seed '%s': %s",
+                    task.get("id"), seed, task.get("status_message"),
                 )
                 continue
+            topics, task_id = _parse_result(task)
+            results.extend(topics)
+            last_task_id = task_id
+        return results
 
-            for task in payload.get("tasks") or []:
-                task_status = task.get("status_code", 0)
-                if task_status not in (20000, 20100):
-                    logger.warning(
-                        "DataForSEO task %s failed for seed '%s': %s",
-                        task.get("id"), seed, task.get("status_message"),
-                    )
-                    continue
-                topics, task_id = _parse_result(task)
-                all_topics.extend(topics)
-                last_task_id = task_id
+    async with _make_client(settings) as client:
+        results_per_seed = await asyncio.gather(
+            *[_fetch_seed(client, seed) for seed in seeds],
+            return_exceptions=True,
+        )
+
+    for seed, result in zip(seeds, results_per_seed):
+        if isinstance(result, Exception):
+            logger.warning("DataForSEO call failed for seed '%s': %s", seed, result)
+        else:
+            all_topics.extend(result)
 
     ranked = _deduplicate_and_rank(all_topics)
     logger.info("DataForSEO returned %d unique topics for category=%s", len(ranked), category)
